@@ -270,7 +270,10 @@ class AgentProcessManager:
 
     async def stop(self) -> tuple[bool, str]:
         """
-        Stop the agent (SIGTERM then SIGKILL if needed).
+        Stop the agent and ALL child processes (SIGTERM then SIGKILL if needed).
+
+        This kills the entire process tree to prevent orphaned processes
+        (Vite, Playwright, node, etc.) from continuing to run.
 
         Returns:
             Tuple of (success, message)
@@ -287,7 +290,24 @@ class AgentProcessManager:
                 except asyncio.CancelledError:
                     pass
 
-            # Terminate gracefully first
+            # Get the process tree BEFORE terminating
+            # This ensures we capture all children while parent is still alive
+            children = []
+            try:
+                proc = psutil.Process(self.process.pid)
+                children = proc.children(recursive=True)
+                logger.info(f"Found {len(children)} child processes to terminate")
+            except psutil.NoSuchProcess:
+                pass  # Parent already dead
+
+            # Terminate children first (bottom-up is safer but top-down works too)
+            for child in children:
+                try:
+                    child.terminate()
+                except psutil.NoSuchProcess:
+                    pass  # Already dead
+
+            # Terminate the main process
             self.process.terminate()
 
             # Wait up to 5 seconds for graceful shutdown
@@ -298,9 +318,19 @@ class AgentProcessManager:
                     timeout=5.0
                 )
             except asyncio.TimeoutError:
-                # Force kill if still running
+                # Force kill survivors - children first, then parent
+                for child in children:
+                    try:
+                        if child.is_running():
+                            child.kill()
+                    except psutil.NoSuchProcess:
+                        pass
                 self.process.kill()
                 await loop.run_in_executor(None, self.process.wait)
+
+            # Final cleanup: kill any stragglers that might have been missed
+            # (processes spawned between getting children list and terminating)
+            await self._cleanup_orphaned_processes()
 
             self._remove_lock()
             self.status = "stopped"
@@ -312,6 +342,34 @@ class AgentProcessManager:
         except Exception as e:
             logger.exception("Failed to stop agent")
             return False, f"Failed to stop agent: {e}"
+
+    async def _cleanup_orphaned_processes(self) -> None:
+        """
+        Clean up any orphaned processes that might have been spawned by the agent.
+
+        Looks for common child processes (vite, esbuild, playwright) that are
+        running in the project directory and kills them.
+        """
+        try:
+            project_path = str(self.project_dir)
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'cwd']):
+                try:
+                    info = proc.info
+                    cmdline = " ".join(info.get('cmdline') or [])
+                    cwd = info.get('cwd') or ""
+
+                    # Check if process is related to our project
+                    if project_path not in cmdline and project_path not in cwd:
+                        continue
+
+                    # Check for known agent-spawned processes
+                    if any(name in cmdline for name in ['vite', 'esbuild', 'playwright', 'mcp-server']):
+                        logger.info(f"Killing orphaned process: {info['name']} (PID {info['pid']})")
+                        proc.terminate()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+        except Exception as e:
+            logger.warning(f"Error cleaning up orphaned processes: {e}")
 
     async def pause(self) -> tuple[bool, str]:
         """
