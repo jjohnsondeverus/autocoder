@@ -1,0 +1,695 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<app_spec>
+  <metadata>
+    <name>Autocoder UI</name>
+    <version>1.0</version>
+    <description>A web-based dashboard for managing and monitoring long-running autonomous coding agents built on the Claude Agent SDK</description>
+    <author>Learning Project</author>
+    <generated>2026-01-06</generated>
+  </metadata>
+
+  <overview>
+    <purpose>
+      Build a full-stack web application that wraps Anthropic's autonomous coding agent harness,
+      providing a visual dashboard for creating projects, managing features, controlling agent
+      execution, and monitoring progress in real-time.
+    </purpose>
+
+    <what_you_are_building>
+      You are building the UI/wrapper layer - a FastAPI backend + React frontend that:
+      - Provides a web-based project management dashboard
+      - Allows users to create projects with AI-assisted spec generation
+      - Manages a database of features/test cases for each project
+      - Controls agent subprocess execution (start/stop/pause/resume)
+      - Streams agent output to the UI in real-time via WebSocket
+      - Displays feature progress on a visual kanban board
+    </what_you_are_building>
+
+    <what_you_are_reusing>
+      You will REUSE the core agent harness from Anthropic's quickstart:
+      https://github.com/anthropics/claude-quickstarts/tree/main/autonomous-coding
+
+      The core harness includes:
+      - autonomous_agent_demo.py - CLI entry point with argument parsing
+      - agent.py - Agent session loop using Claude Agent SDK
+      - client.py - SDK client configuration with security settings
+      - security.py - Bash command allowlist validation
+      - prompts.py - Prompt template loading
+      - progress.py - Basic progress tracking utilities
+
+      These files implement the "two-agent pattern" (Initializer + Coding agents) and handle
+      all Claude API communication. Your wrapper will orchestrate these as subprocesses.
+    </what_you_are_reusing>
+
+    <learning_goals>
+      Building this project will teach you:
+      - How to orchestrate long-running AI agent processes from a web app
+      - Full-stack development with FastAPI (Python) and React (TypeScript)
+      - Real-time communication via WebSocket for streaming agent output
+      - Subprocess management and process lifecycle handling
+      - Database design for task/feature tracking
+      - MCP (Model Context Protocol) server development
+      - Security considerations for AI-powered applications
+    </learning_goals>
+  </overview>
+
+  <architecture>
+    <tech_stack>
+      <backend>
+        <language>Python 3.10+</language>
+        <framework>FastAPI</framework>
+        <database>SQLite with SQLAlchemy ORM</database>
+        <websocket>fastapi websockets / websockets library</websocket>
+        <process_management>psutil for subprocess lifecycle</process_management>
+        <mcp>FastMCP for Model Context Protocol server</mcp>
+      </backend>
+      <frontend>
+        <language>TypeScript</language>
+        <framework>React 18</framework>
+        <build_tool>Vite</build_tool>
+        <styling>Tailwind CSS</styling>
+        <state_management>TanStack Query (React Query)</state_management>
+        <ui_components>Radix UI primitives</ui_components>
+        <icons>Lucide React</icons>
+      </frontend>
+    </tech_stack>
+
+    <high_level_architecture>
+      ```
+      ┌─────────────────────────────────────────────────────────────────┐
+      │                        React Frontend                          │
+      │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌───────────┐ │
+      │  │  Project    │ │   Kanban    │ │   Agent     │ │  Debug    │ │
+      │  │  Selector   │ │   Board     │ │   Controls  │ │  Logs     │ │
+      │  └─────────────┘ └─────────────┘ └─────────────┘ └───────────┘ │
+      └────────────────────────────┬────────────────────────────────────┘
+                                   │ HTTP + WebSocket
+      ┌────────────────────────────┴────────────────────────────────────┐
+      │                      FastAPI Backend                            │
+      │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────────┐│
+      │  │ Projects │ │ Features │ │  Agent   │ │ WebSocket Manager   ││
+      │  │  Router  │ │  Router  │ │  Router  │ │ (Real-time streams) ││
+      │  └──────────┘ └──────────┘ └──────────┘ └──────────────────────┘│
+      │                      │                                          │
+      │              ┌───────┴───────┐                                  │
+      │              │Process Manager│ ←──── Spawns subprocess          │
+      │              └───────────────┘                                  │
+      └──────────────────────┬──────────────────────────────────────────┘
+                             │
+      ┌──────────────────────┴──────────────────────────────────────────┐
+      │          Core Agent Harness (Anthropic Quickstart)              │
+      │                                                                  │
+      │  python autonomous_agent_demo.py --project-dir ./my-project     │
+      │                                                                  │
+      │  ┌─────────┐ ┌─────────┐ ┌──────────┐ ┌─────────┐ ┌───────────┐ │
+      │  │agent.py │ │client.py│ │security.py│ │prompts.py│ │progress.py│ │
+      │  └─────────┘ └─────────┘ └──────────┘ └─────────┘ └───────────┘ │
+      │                          │                                       │
+      │                    ┌─────┴─────┐                                 │
+      │                    │ Claude API │                                │
+      │                    └───────────┘                                 │
+      └──────────────────────────────────────────────────────────────────┘
+                                   │
+      ┌────────────────────────────┴────────────────────────────────────┐
+      │                     MCP Feature Server                          │
+      │  ┌────────────────────────────────────────────────────────────┐ │
+      │  │ feature_mcp.py - Exposes tools to Claude:                  │ │
+      │  │   - feature_get_stats      (progress metrics)              │ │
+      │  │   - feature_get_next       (highest-priority pending)      │ │
+      │  │   - feature_mark_passing   (complete a feature)            │ │
+      │  │   - feature_create_bulk    (initializer creates all)       │ │
+      │  └────────────────────────────────────────────────────────────┘ │
+      │                          │                                       │
+      │                 ┌────────┴────────┐                              │
+      │                 │ features.db     │ (SQLite per project)         │
+      │                 └─────────────────┘                              │
+      └──────────────────────────────────────────────────────────────────┘
+      ```
+    </high_level_architecture>
+
+    <data_flow>
+      <project_creation>
+        1. User fills out project creation form in React UI
+        2. Frontend POST to /api/projects with name + path
+        3. Backend creates project directory structure
+        4. Backend registers project in global registry database
+        5. Backend scaffolds prompt templates to project/prompts/
+        6. UI receives success, updates project list
+      </project_creation>
+
+      <agent_execution>
+        1. User clicks "Start Agent" in UI
+        2. Frontend POST to /api/projects/{name}/agent/start
+        3. ProcessManager spawns subprocess: python autonomous_agent_demo.py --project-dir ...
+        4. ProcessManager captures stdout/stderr
+        5. ProcessManager broadcasts output lines via WebSocket
+        6. React UI receives WebSocket messages, updates log viewer
+        7. Agent uses MCP tools to query/update features.db
+        8. UI polls /api/projects/{name}/features for kanban updates
+      </agent_execution>
+
+      <real_time_updates>
+        WebSocket message types:
+        - "progress" - Feature completion stats { passing: N, total: M }
+        - "agent_status" - Status changes { status: "running"|"paused"|"stopped"|"crashed" }
+        - "log" - Agent output line { message: "...", timestamp: "..." }
+        - "feature_update" - Feature status change { feature_id: N, passes: true }
+      </real_time_updates>
+    </data_flow>
+  </architecture>
+
+  <milestones>
+    <milestone number="1" name="Project Foundation">
+      <description>Set up the project structure and basic FastAPI backend</description>
+      <features>
+        <feature priority="1" category="setup">
+          <name>Initialize project with proper structure</name>
+          <description>Create directory structure for backend (server/) and frontend (ui/)</description>
+          <steps>
+            <step>Create root directory with requirements.txt</step>
+            <step>Create server/ directory for FastAPI app</step>
+            <step>Create ui/ directory for React app</step>
+            <step>Set up Python virtual environment</step>
+            <step>Install core dependencies: fastapi, uvicorn, sqlalchemy, pydantic</step>
+          </steps>
+        </feature>
+        <feature priority="2" category="backend">
+          <name>Basic FastAPI application</name>
+          <description>Create minimal FastAPI server with health check endpoint</description>
+          <steps>
+            <step>Create server/main.py with FastAPI app instance</step>
+            <step>Add CORS middleware for localhost</step>
+            <step>Create /api/health endpoint</step>
+            <step>Add uvicorn runner for development</step>
+            <step>Test server starts on port 8888</step>
+          </steps>
+        </feature>
+        <feature priority="3" category="database">
+          <name>SQLite database setup</name>
+          <description>Create SQLAlchemy models and database initialization</description>
+          <steps>
+            <step>Create api/database.py with SQLAlchemy base</step>
+            <step>Define Feature model: id, priority, category, name, description, steps (JSON), passes (bool), in_progress (bool)</step>
+            <step>Create function to initialize database from project path</step>
+            <step>Create function to get database session</step>
+          </steps>
+        </feature>
+      </features>
+    </milestone>
+
+    <milestone number="2" name="Project Registry">
+      <description>Build system for managing multiple projects across the filesystem</description>
+      <features>
+        <feature priority="4" category="backend">
+          <name>Project registry database</name>
+          <description>Global SQLite database mapping project names to filesystem paths</description>
+          <steps>
+            <step>Create registry.py module</step>
+            <step>Define Project model: name (unique), path, created_at</step>
+            <step>Store registry at ~/.autocoder/registry.db (cross-platform)</step>
+            <step>Implement register_project(name, path) function</step>
+            <step>Implement get_project_path(name) function</step>
+            <step>Implement list_registered_projects() function</step>
+            <step>Use POSIX paths internally for cross-platform compatibility</step>
+          </steps>
+        </feature>
+        <feature priority="5" category="api">
+          <name>Projects REST API</name>
+          <description>CRUD endpoints for project management</description>
+          <steps>
+            <step>Create server/routers/projects.py</step>
+            <step>GET /api/projects - List all registered projects</step>
+            <step>POST /api/projects - Create new project with name and path</step>
+            <step>GET /api/projects/{name} - Get project details</step>
+            <step>DELETE /api/projects/{name} - Delete project from registry</step>
+            <step>Include router in main.py</step>
+          </steps>
+        </feature>
+        <feature priority="6" category="backend">
+          <name>Project initialization</name>
+          <description>Scaffold new projects with proper directory structure</description>
+          <steps>
+            <step>Create project directory if it doesn't exist</step>
+            <step>Create prompts/ subdirectory</step>
+            <step>Copy template files: app_spec.txt, initializer_prompt.md, coding_prompt.md</step>
+            <step>Initialize empty features.db</step>
+            <step>Register project in global registry</step>
+          </steps>
+        </feature>
+      </features>
+    </milestone>
+
+    <milestone number="3" name="Feature Management">
+      <description>Build feature tracking with MCP server for agent integration</description>
+      <features>
+        <feature priority="7" category="api">
+          <name>Features REST API</name>
+          <description>CRUD endpoints for feature management</description>
+          <steps>
+            <step>Create server/routers/features.py</step>
+            <step>GET /api/projects/{name}/features - List all features</step>
+            <step>POST /api/projects/{name}/features - Create feature</step>
+            <step>GET /api/projects/{name}/features/{id} - Get feature details</step>
+            <step>DELETE /api/projects/{name}/features/{id} - Delete feature</step>
+            <step>Include router in main.py</step>
+          </steps>
+        </feature>
+        <feature priority="8" category="mcp">
+          <name>Feature MCP server</name>
+          <description>MCP server exposing feature management tools to Claude agent</description>
+          <steps>
+            <step>Create mcp_server/feature_mcp.py using FastMCP</step>
+            <step>Implement feature_get_stats tool - returns {passing, in_progress, pending, total}</step>
+            <step>Implement feature_get_next tool - returns highest-priority pending feature</step>
+            <step>Implement feature_mark_passing(id) tool - marks feature complete</step>
+            <step>Implement feature_mark_in_progress(id) tool - marks feature as being worked on</step>
+            <step>Implement feature_skip(id) tool - moves feature to end of queue</step>
+            <step>Implement feature_create_bulk(features) tool - bulk create for initializer</step>
+            <step>Read PROJECT_DIR from environment variable</step>
+            <step>Use async context manager for database lifecycle</step>
+          </steps>
+        </feature>
+        <feature priority="9" category="backend">
+          <name>Feature progress utilities</name>
+          <description>Helper functions for querying feature progress</description>
+          <steps>
+            <step>Create progress.py module</step>
+            <step>has_features(project_path) - check if project has any features</step>
+            <step>count_passing_tests(project_path) - get progress stats</step>
+            <step>These are used to determine initializer vs coding agent mode</step>
+          </steps>
+        </feature>
+      </features>
+    </milestone>
+
+    <milestone number="4" name="Agent Process Control">
+      <description>Build subprocess management for running agents in background</description>
+      <features>
+        <feature priority="10" category="backend">
+          <name>Process manager service</name>
+          <description>Service class for managing agent subprocess lifecycle</description>
+          <steps>
+            <step>Create server/services/process_manager.py</step>
+            <step>ProcessManager class with methods: start, stop, pause, resume, get_status</step>
+            <step>Store subprocess reference and PID</step>
+            <step>Capture stdout/stderr in separate threads</step>
+            <step>Track status: running, paused, stopped, crashed</step>
+            <step>Use psutil for process management</step>
+            <step>Create .agent.lock file to prevent duplicate instances</step>
+          </steps>
+        </feature>
+        <feature priority="11" category="api">
+          <name>Agent control REST API</name>
+          <description>Endpoints for controlling agent execution</description>
+          <steps>
+            <step>Create server/routers/agent.py</step>
+            <step>POST /api/projects/{name}/agent/start - Start agent subprocess</step>
+            <step>POST /api/projects/{name}/agent/stop - Terminate agent</step>
+            <step>POST /api/projects/{name}/agent/pause - Pause execution (SIGSTOP)</step>
+            <step>POST /api/projects/{name}/agent/resume - Resume execution (SIGCONT)</step>
+            <step>GET /api/projects/{name}/agent/status - Get current status</step>
+            <step>Accept yolo mode flag in start endpoint</step>
+          </steps>
+        </feature>
+        <feature priority="12" category="backend">
+          <name>Integrate core harness</name>
+          <description>Wire up ProcessManager to spawn the Anthropic harness as subprocess</description>
+          <steps>
+            <step>ProcessManager.start() spawns: python autonomous_agent_demo.py --project-dir {path}</step>
+            <step>Pass --yolo flag if YOLO mode enabled</step>
+            <step>Set up stdout/stderr piping for log capture</step>
+            <step>Handle subprocess exit codes and crashes</step>
+          </steps>
+        </feature>
+      </features>
+    </milestone>
+
+    <milestone number="5" name="WebSocket Real-time Updates">
+      <description>Add real-time communication between backend and frontend</description>
+      <features>
+        <feature priority="13" category="backend">
+          <name>WebSocket connection manager</name>
+          <description>Manage per-project WebSocket connections</description>
+          <steps>
+            <step>Create server/websocket.py</step>
+            <step>ConnectionManager class with active connections dict</step>
+            <step>connect(websocket, project_name) - add connection</step>
+            <step>disconnect(websocket, project_name) - remove connection</step>
+            <step>broadcast_to_project(project_name, message) - send to all project connections</step>
+            <step>Implement heartbeat/ping for dead connection detection</step>
+          </steps>
+        </feature>
+        <feature priority="14" category="api">
+          <name>WebSocket endpoint</name>
+          <description>WebSocket route for project-specific real-time updates</description>
+          <steps>
+            <step>Add WebSocket route: /ws/projects/{project_name}</step>
+            <step>On connect, add to ConnectionManager</step>
+            <step>On disconnect, remove from ConnectionManager</step>
+            <step>Handle ping/pong for keepalive</step>
+          </steps>
+        </feature>
+        <feature priority="15" category="backend">
+          <name>Stream agent output via WebSocket</name>
+          <description>Connect ProcessManager stdout capture to WebSocket broadcasts</description>
+          <steps>
+            <step>ProcessManager captures stdout line by line</step>
+            <step>For each line, call ConnectionManager.broadcast_to_project()</step>
+            <step>Message format: { type: "log", message: "...", timestamp: "..." }</step>
+            <step>Also broadcast status changes: { type: "agent_status", status: "..." }</step>
+            <step>Broadcast progress updates: { type: "progress", passing: N, total: M }</step>
+          </steps>
+        </feature>
+      </features>
+    </milestone>
+
+    <milestone number="6" name="React Frontend - Core">
+      <description>Build the main React application shell</description>
+      <features>
+        <feature priority="16" category="frontend">
+          <name>Initialize React project</name>
+          <description>Set up React with TypeScript, Vite, and Tailwind</description>
+          <steps>
+            <step>Create ui/ directory with Vite React-TS template</step>
+            <step>Install dependencies: @tanstack/react-query, tailwindcss, @radix-ui/react-*, lucide-react</step>
+            <step>Configure Vite proxy for /api and /ws to backend</step>
+            <step>Set up Tailwind CSS configuration</step>
+            <step>Create base layout in App.tsx</step>
+          </steps>
+        </feature>
+        <feature priority="17" category="frontend">
+          <name>API client layer</name>
+          <description>TypeScript functions for REST API calls</description>
+          <steps>
+            <step>Create src/lib/api.ts</step>
+            <step>Create src/lib/types.ts with TypeScript interfaces</step>
+            <step>Implement: listProjects, createProject, deleteProject, getProject</step>
+            <step>Implement: listFeatures, createFeature, deleteFeature</step>
+            <step>Implement: startAgent, stopAgent, pauseAgent, resumeAgent, getAgentStatus</step>
+            <step>Generic fetchJSON wrapper with error handling</step>
+          </steps>
+        </feature>
+        <feature priority="18" category="frontend">
+          <name>React Query hooks</name>
+          <description>Custom hooks for data fetching with TanStack Query</description>
+          <steps>
+            <step>Create src/hooks/useProjects.ts</step>
+            <step>useProjects - fetch all projects</step>
+            <step>useCreateProject - mutation for creating project</step>
+            <step>useDeleteProject - mutation for deleting project</step>
+            <step>Create src/hooks/useFeatures.ts with similar pattern</step>
+            <step>Set up QueryClient provider in main.tsx</step>
+          </steps>
+        </feature>
+        <feature priority="19" category="frontend">
+          <name>WebSocket hook</name>
+          <description>Custom hook for WebSocket connection and message handling</description>
+          <steps>
+            <step>Create src/hooks/useWebSocket.ts</step>
+            <step>Connect to /ws/projects/{project_name}</step>
+            <step>Handle reconnection with exponential backoff</step>
+            <step>Parse incoming messages by type</step>
+            <step>Return: logs array, agentStatus, progress, isConnected</step>
+            <step>Clean up connection on unmount</step>
+          </steps>
+        </feature>
+      </features>
+    </milestone>
+
+    <milestone number="7" name="React Frontend - Components">
+      <description>Build the main UI components</description>
+      <features>
+        <feature priority="20" category="frontend">
+          <name>Project selector component</name>
+          <description>Dropdown for selecting the active project</description>
+          <steps>
+            <step>Create src/components/ProjectSelector.tsx</step>
+            <step>Fetch projects using useProjects hook</step>
+            <step>Radix UI Select for dropdown</step>
+            <step>Store selected project in localStorage</step>
+            <step>Call onProjectSelect callback when selection changes</step>
+          </steps>
+        </feature>
+        <feature priority="21" category="frontend">
+          <name>New project modal</name>
+          <description>Multi-step modal for creating new projects</description>
+          <steps>
+            <step>Create src/components/NewProjectModal.tsx</step>
+            <step>Step 1: Enter project name</step>
+            <step>Step 2: Select project path (text input for now)</step>
+            <step>Step 3: Choose prompt source (manual or template)</step>
+            <step>Use Radix UI Dialog</step>
+            <step>Call createProject mutation on submit</step>
+          </steps>
+        </feature>
+        <feature priority="22" category="frontend">
+          <name>Kanban board component</name>
+          <description>Visual board showing features in columns by status</description>
+          <steps>
+            <step>Create src/components/KanbanBoard.tsx</step>
+            <step>Three columns: Pending, In Progress, Done</step>
+            <step>Fetch features using useFeatures hook</step>
+            <step>Filter features into columns based on passes and in_progress fields</step>
+            <step>Create FeatureCard subcomponent for individual cards</step>
+            <step>Show feature name, category, and progress indicator</step>
+          </steps>
+        </feature>
+        <feature priority="23" category="frontend">
+          <name>Agent control component</name>
+          <description>Buttons for starting, stopping, pausing, resuming agent</description>
+          <steps>
+            <step>Create src/components/AgentControl.tsx</step>
+            <step>Start button (disabled when running)</step>
+            <step>Stop button (disabled when stopped)</step>
+            <step>Pause/Resume toggle button</step>
+            <step>YOLO mode toggle switch</step>
+            <step>Show current agent status indicator</step>
+            <step>Call appropriate API functions on button clicks</step>
+          </steps>
+        </feature>
+        <feature priority="24" category="frontend">
+          <name>Progress dashboard component</name>
+          <description>Display feature completion statistics</description>
+          <steps>
+            <step>Create src/components/ProgressDashboard.tsx</step>
+            <step>Show: X / Y features complete</step>
+            <step>Progress bar visualization</step>
+            <step>Stats breakdown: pending, in progress, done</step>
+            <step>Update from WebSocket progress messages</step>
+          </steps>
+        </feature>
+        <feature priority="25" category="frontend">
+          <name>Debug log viewer component</name>
+          <description>Scrollable panel showing agent output</description>
+          <steps>
+            <step>Create src/components/DebugLogViewer.tsx</step>
+            <step>Receive logs from useWebSocket hook</step>
+            <step>Auto-scroll to bottom on new messages</step>
+            <step>Toggle expand/collapse</step>
+            <step>Timestamp display for each line</step>
+            <step>Clear logs button</step>
+          </steps>
+        </feature>
+      </features>
+    </milestone>
+
+    <milestone number="8" name="Main Application Assembly">
+      <description>Wire all components together in App.tsx</description>
+      <features>
+        <feature priority="26" category="frontend">
+          <name>App layout and state</name>
+          <description>Assemble components in main App.tsx</description>
+          <steps>
+            <step>Header with ProjectSelector and NewProject button</step>
+            <step>Main area with KanbanBoard</step>
+            <step>Sidebar or bottom panel with AgentControl and ProgressDashboard</step>
+            <step>Collapsible DebugLogViewer at bottom</step>
+            <step>selectedProject state drives all components</step>
+            <step>WebSocket connection keyed to selectedProject</step>
+          </steps>
+        </feature>
+        <feature priority="27" category="frontend">
+          <name>Keyboard shortcuts</name>
+          <description>Keyboard navigation for power users</description>
+          <steps>
+            <step>D - Toggle debug log viewer</step>
+            <step>N - Open new project modal</step>
+            <step>Escape - Close any open modal</step>
+            <step>useEffect with keydown listener</step>
+          </steps>
+        </feature>
+        <feature priority="28" category="integration">
+          <name>End-to-end testing</name>
+          <description>Verify full flow works</description>
+          <steps>
+            <step>Start backend server</step>
+            <step>Start frontend dev server</step>
+            <step>Create new project through UI</step>
+            <step>Verify project appears in selector</step>
+            <step>Start agent and verify logs stream to UI</step>
+            <step>Verify features appear on kanban board</step>
+            <step>Stop agent and verify status updates</step>
+          </steps>
+        </feature>
+      </features>
+    </milestone>
+
+    <milestone number="9" name="Enhanced Features (Optional)">
+      <description>Additional features to make the experience better</description>
+      <features>
+        <feature priority="29" category="frontend">
+          <name>Server-side filesystem browser</name>
+          <description>Allow users to browse and select project paths via the UI</description>
+          <steps>
+            <step>Create server/routers/filesystem.py</step>
+            <step>GET /api/filesystem/list?path=... - List directory contents</step>
+            <step>Return directories and files separately</step>
+            <step>Security: prevent path traversal attacks</step>
+            <step>Create src/components/FolderBrowser.tsx</step>
+            <step>Navigate up/down directory tree</step>
+            <step>Select directory as project path</step>
+          </steps>
+        </feature>
+        <feature priority="30" category="frontend">
+          <name>Spec creation chat</name>
+          <description>Interactive AI-assisted spec generation</description>
+          <steps>
+            <step>Create server/routers/spec_creation.py with WebSocket endpoint</step>
+            <step>Create server/services/spec_chat_session.py</step>
+            <step>Multi-turn conversation to refine app spec</step>
+            <step>Create src/components/SpecCreationChat.tsx</step>
+            <step>Create src/hooks/useSpecChat.ts</step>
+            <step>Chat interface with message history</step>
+            <step>Save generated spec to project prompts/app_spec.txt</step>
+          </steps>
+        </feature>
+        <feature priority="31" category="frontend">
+          <name>Codebase assistant chat</name>
+          <description>Q&amp;A assistant for asking questions about the project</description>
+          <steps>
+            <step>Create server/routers/assistant_chat.py</step>
+            <step>Create server/services/assistant_chat_session.py</step>
+            <step>Retrieve project context (files, git history)</step>
+            <step>Create src/components/AssistantChat.tsx</step>
+            <step>Create src/hooks/useAssistantChat.ts</step>
+            <step>Floating action button to open assistant panel</step>
+          </steps>
+        </feature>
+        <feature priority="32" category="frontend">
+          <name>Celebration effects</name>
+          <description>Fun feedback when all features are complete</description>
+          <steps>
+            <step>Create src/hooks/useCelebration.ts</step>
+            <step>Trigger confetti animation when all features pass</step>
+            <step>Optional: Sound effect on feature completion</step>
+            <step>Create src/hooks/useFeatureSound.ts</step>
+          </steps>
+        </feature>
+        <feature priority="33" category="styling">
+          <name>Polished design system</name>
+          <description>Apply consistent visual design</description>
+          <steps>
+            <step>Choose design aesthetic (e.g., neobrutalism, minimal, etc.)</step>
+            <step>Define color tokens in Tailwind config</step>
+            <step>Custom CSS animations for transitions</step>
+            <step>Consistent spacing, typography, shadows</step>
+            <step>Responsive layout for different screen sizes</step>
+          </steps>
+        </feature>
+      </features>
+    </milestone>
+  </milestones>
+
+  <implementation_notes>
+    <security_considerations>
+      <item>Only allow localhost connections (CORS + middleware check)</item>
+      <item>Validate filesystem paths to prevent traversal attacks</item>
+      <item>Use .agent.lock files to prevent duplicate agent instances</item>
+      <item>The core harness handles Claude API security (command allowlist, sandbox, etc.)</item>
+    </security_considerations>
+
+    <key_decisions_to_make>
+      <decision>
+        <question>How should features be stored?</question>
+        <recommended>SQLite with SQLAlchemy - better concurrency than JSON files</recommended>
+        <alternative>JSON file - simpler but has race condition issues</alternative>
+      </decision>
+      <decision>
+        <question>How should the agent communicate with feature database?</question>
+        <recommended>MCP server - native Claude tool integration, efficient</recommended>
+        <alternative>REST API - simpler but more HTTP overhead</alternative>
+      </decision>
+      <decision>
+        <question>Per-project WebSocket or global WebSocket?</question>
+        <recommended>Per-project - reduces broadcast overhead, cleaner isolation</recommended>
+        <alternative>Global with filtering - simpler but noisier</alternative>
+      </decision>
+    </key_decisions_to_make>
+
+    <gotchas>
+      <gotcha>Windows console encoding needs utf-8 fix for emoji output</gotcha>
+      <gotcha>Lock files must be cleaned up if agent crashes unexpectedly</gotcha>
+      <gotcha>Use lazy imports in routers to avoid circular dependency issues</gotcha>
+      <gotcha>POSIX path format (forward slashes) for cross-platform registry</gotcha>
+      <gotcha>WebSocket needs heartbeat/ping for detecting dead connections</gotcha>
+    </gotchas>
+
+    <suggested_reading>
+      <resource>
+        <name>Anthropic Autonomous Coding Quickstart</name>
+        <url>https://github.com/anthropics/claude-quickstarts/tree/main/autonomous-coding</url>
+        <description>The core harness you'll be wrapping</description>
+      </resource>
+      <resource>
+        <name>FastAPI Documentation</name>
+        <url>https://fastapi.tiangolo.com/</url>
+        <description>Python web framework for the backend</description>
+      </resource>
+      <resource>
+        <name>TanStack Query Documentation</name>
+        <url>https://tanstack.com/query/latest</url>
+        <description>React data fetching library</description>
+      </resource>
+      <resource>
+        <name>FastMCP Documentation</name>
+        <url>https://github.com/jlowin/fastmcp</url>
+        <description>Python library for building MCP servers</description>
+      </resource>
+    </suggested_reading>
+  </implementation_notes>
+
+  <getting_started>
+    <step number="1">
+      <title>Clone and understand the core harness</title>
+      <description>
+        Clone Anthropic's quickstart repo and understand how the core agent files work.
+        Read through autonomous_agent_demo.py, agent.py, client.py, security.py.
+        Run the basic demo to see it in action.
+      </description>
+    </step>
+    <step number="2">
+      <title>Set up your new project structure</title>
+      <description>
+        Create a new repo with server/ and ui/ directories.
+        Copy the core harness files to your root directory.
+        Set up Python venv and install requirements.
+      </description>
+    </step>
+    <step number="3">
+      <title>Build incrementally by milestone</title>
+      <description>
+        Follow the milestones in order. Each builds on the previous.
+        Test each feature before moving to the next.
+        The milestones are ordered to give you a working (if minimal) system as early as possible.
+      </description>
+    </step>
+    <step number="4">
+      <title>Integrate and test</title>
+      <description>
+        Wire up the frontend and backend.
+        Test the full flow: create project -> start agent -> watch features complete.
+        Debug any issues with the WebSocket streaming or subprocess management.
+      </description>
+    </step>
+  </getting_started>
+</app_spec>

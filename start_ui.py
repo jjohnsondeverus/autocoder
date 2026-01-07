@@ -33,6 +33,11 @@ ROOT = Path(__file__).parent.absolute()
 VENV_DIR = ROOT / "venv"
 UI_DIR = ROOT / "ui"
 
+# Use high ports to avoid conflicts with projects being built by the autonomous agent
+# Agent-built projects typically use ports 8888 (backend) and 5173 (frontend)
+BACKEND_PORT_START = 9900
+VITE_DEV_PORT = 9800
+
 
 def print_step(step: int, total: int, message: str) -> None:
     """Print a formatted step message."""
@@ -40,8 +45,12 @@ def print_step(step: int, total: int, message: str) -> None:
     print("-" * 50)
 
 
-def find_available_port(start: int = 8888, max_attempts: int = 10) -> int:
-    """Find an available port starting from the given port."""
+def find_available_port(start: int = BACKEND_PORT_START, max_attempts: int = 10) -> int:
+    """Find an available port starting from the given port.
+
+    NOTE: We use port 9900+ to avoid conflicts with projects being built
+    by the autonomous agent, which typically use ports 8888 and 5173.
+    """
     for port in range(start, start + max_attempts):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -160,7 +169,7 @@ def start_dev_server(port: int) -> tuple:
 
     print(f"\n  Starting development servers...")
     print(f"  - FastAPI backend: http://127.0.0.1:{port}")
-    print(f"  - Vite frontend:   http://127.0.0.1:5173")
+    print(f"  - Vite frontend:   http://127.0.0.1:{VITE_DEV_PORT}")
 
     # Start FastAPI
     backend = subprocess.Popen([
@@ -171,12 +180,12 @@ def start_dev_server(port: int) -> tuple:
         "--reload"
     ], cwd=str(ROOT))
 
-    # Start Vite with API port env var for proxy configuration
+    # Start Vite with custom port and API port env var for proxy configuration
     npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
     vite_env = os.environ.copy()
     vite_env["VITE_API_PORT"] = str(port)
     frontend = subprocess.Popen([
-        npm_cmd, "run", "dev"
+        npm_cmd, "run", "dev", "--", "--port", str(VITE_DEV_PORT)
     ], cwd=str(UI_DIR), env=vite_env)
 
     return backend, frontend
@@ -253,9 +262,9 @@ def main() -> None:
         if dev_mode:
             backend, frontend = start_dev_server(port)
 
-            # Open browser to Vite dev server
+            # Open browser to Vite dev server (high port to avoid conflicts)
             time.sleep(3)
-            webbrowser.open("http://127.0.0.1:5173")
+            webbrowser.open(f"http://127.0.0.1:{VITE_DEV_PORT}")
 
             print("\n" + "=" * 50)
             print("  Development mode active")
