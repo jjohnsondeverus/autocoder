@@ -63,6 +63,15 @@
 - ProcessManager may report "stopped" while zombie process still exists - check with `ps aux | grep autonomous`
 - Kill orphaned processes manually before restarting agent from UI
 
+### Process Tree Killing (Critical Bug Fix)
+- **Bug:** `subprocess.terminate()` only kills direct child, NOT grandchildren
+- Child processes (Vite, Playwright, esbuild, node) become orphans and keep running
+- Orphans hold ports, consume resources, and can interfere with subsequent runs
+- **Fix:** Use `psutil.Process(pid).children(recursive=True)` to get entire tree
+- Terminate children first, then parent; force kill survivors after timeout
+- Added `_cleanup_orphaned_processes()` as safety net to catch stragglers by project path
+- Common orphan processes to watch for: `vite`, `esbuild`, `playwright`, `mcp-server`
+
 ### Port Conflicts (Agents Building Agents)
 - When autocoder builds a project with similar infrastructure, both compete for default ports (8888, 5173)
 - Autocoder now uses high ports to avoid conflicts: `BACKEND_PORT_START = 9900`, `VITE_DEV_PORT = 9800`
